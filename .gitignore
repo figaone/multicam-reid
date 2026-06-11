@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tool workspace / generated outputs
+.reid/
+*.tracks.json
+
+# Model weights
+*.pt
+*.onnx
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
