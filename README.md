@@ -75,7 +75,7 @@ opens.
 
 ```bash
 python -m multicam_reid sync   my_intersection   # align + cut aligned segments
-python -m multicam_reid match  my_intersection/.reid/synced/segment_01
+python -m multicam_reid match  my_intersection/.reid/synced/seg_20260612_112209
 ```
 
 **Full pipeline, one step at a time:**
@@ -204,15 +204,36 @@ How it works:
 2. Press **A** to set the **anchor** — this locks in each camera's frame offset
    relative to the *reference* camera (the active one; press **R** to change which
    camera is the reference).
-3. Press **I** and **O** to mark the segment **in** and **out** points on the
-   reference timeline, then **E** to export that segment.
-4. Repeat 3–4 to cut as many segments as you like — each is saved separately.
+3. Press **I** to mark the segment **in** point on the reference timeline, scrub
+   forward, then **O** to mark the **out** point. (If you never press **O**, the
+   segment runs to the **end of the video**.)
+4. Press **E** to export. The segment is **auto-named** with a timestamp
+   (e.g. `seg_20260612_112209`) and written **in the background** — you can keep
+   scrubbing and mark/export the next segment immediately while it saves.
+5. Repeat 3–4 to cut as many segments as you like — each is saved separately.
+
+**Fine-tuning alignment while playing.** Press **F** to *freeze* the active
+camera: it stays on its current frame while the **other** cameras keep playing
+when you press **SPACE**. This lets you correct a small lag on one camera, then
+press **SPACE** to continue, freeze/nudge again later, and so on. The export
+always uses the camera positions **as they are when you press `E`**, so every
+adjustment you made along the way is reflected in the final clip.
+
+> **One offset per camera.** Each camera is exported with a single constant
+> offset for the whole segment. That perfectly captures a fixed lag correction.
+> If a camera *drifts continuously* within a segment, split it into shorter
+> segments instead.
+
+Before the window opens, `sync` prints each camera's frame rate and warns if
+they differ — a constant offset can drift over long segments when the cameras
+run at different fps. Re-encode to a common rate first if needed, e.g.
+`ffmpeg -i input.mp4 -r 10 -c:v libx264 output.mp4`.
 
 Exported clips land in `.reid/synced/<segment>/` and are themselves valid
 projects, so you can run tracking and matching on a single segment:
 
 ```bash
-python -m multicam_reid match my_intersection/.reid/synced/segment_01
+python -m multicam_reid match my_intersection/.reid/synced/seg_20260612_112209
 ```
 
 > **What is the "reference" camera?** Offsets are measured relative to one
@@ -236,16 +257,17 @@ Press **H** in the sync window for this list any time.
 | `.` / `,`      | Step **all** cameras ±1 frame                |
 | `L` / `J`      | Skip **all** cameras ±5 seconds              |
 | `SPACE`        | Play / Pause all                             |
-| `F`            | Freeze / unfreeze the active camera          |
-| `+` / `-`      | Playback speed                               |
+| `F`            | Freeze active cam (others keep playing on `SPACE`) |
+| `+` / `-`      | Playback speed (fast-forward all when playing) |
 | `HOME`         | All cameras to frame 0                        |
 | `A`            | Set the alignment **anchor**                 |
-| `I` / `O`      | Mark segment **in** / **out** (reference)    |
+| `I` / `O`      | Mark segment **in** / **out** (`O` optional — end of video if unset) |
 | `C`            | Clear the current segment marks              |
-| `E`            | Export the current segment                   |
+| `E`            | Export segment (auto-named, saves in background) |
+| `X`            | Clear **all** saved segments (press twice to confirm) |
 | `P`            | Print saved segments to the console          |
 | `H`            | Toggle help overlay                          |
-| `Q`            | Save and quit                                |
+| `Q`            | Save and quit (waits for exports to finish)  |
 
 ## How data is stored
 

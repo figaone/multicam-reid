@@ -119,6 +119,21 @@ def cmd_export(args):
 
 def cmd_sync(args):
     project = _ensure_project(args.folder, force=False)
+
+    # Pre-flight: manual sync assumes a common frame rate across cameras.
+    # A mismatch makes a single constant offset drift over long segments.
+    fps_values = [c.fps for c in project.cameras if c.fps]
+    print("\n  Camera frame rates:")
+    for c in project.cameras:
+        print(f"    {c.name}: {c.fps:.3f} fps  ({c.frame_count} frames)")
+    if fps_values and (max(fps_values) - min(fps_values) > 0.05):
+        print("\n  WARNING: cameras do NOT share the same frame rate.")
+        print("  Alignment may drift over long segments. To re-encode all videos")
+        print("  to a common fps first, use ffmpeg, e.g.:")
+        print("    ffmpeg -i input.mp4 -r 10 -c:v libx264 output.mp4\n")
+    else:
+        print("  All cameras share the same frame rate. Good to sync.\n")
+
     from .ui.sync_tool import SyncTool
 
     tool = SyncTool(project)

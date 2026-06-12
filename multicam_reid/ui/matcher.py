@@ -597,7 +597,9 @@ class Matcher:
     # ------------------------------------------------------------------ #
     def run(self):
         window = f"multicam_reid matcher - {self.project.folder.name}"
-        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        # WINDOW_GUI_NORMAL removes OpenCV's native Qt toolbar (zoom/pan/save),
+        # whose blurry tooltips are unreadable; we provide our own H help instead.
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
         cv2.resizeWindow(window, min(self.canvas_w, MAX_CANVAS_WIDTH),
                          min(self.canvas_h, MAX_CANVAS_HEIGHT))
         cv2.setMouseCallback(window, self.mouse_callback)

@@ -20,6 +20,9 @@ directly as a new project for tracking + matching.
 
 from __future__ import annotations
 
+import threading
+from datetime import datetime
+
 import cv2
 import numpy as np
 from loguru import logger
@@ -48,14 +51,18 @@ HELP_LINES = [
     ". / ,             ALL cams step +/- 1 frame",
     "L / J             ALL cams skip +/- 5 seconds",
     "SPACE             Play / Pause all",
-    "F                 Freeze / unfreeze active cam",
-    "+ / -             Playback speed",
+    "+ / -             Playback speed (fast-forward all when playing)",
+    "F                 Freeze active cam (it stays still while",
+    "                  the OTHER cams keep playing on SPACE)",
     "HOME              All cams to frame 0",
     "",
     "A                 Set ANCHOR (lock offsets here)",
-    "I / O             Mark segment IN / OUT (reference)",
+    "I / O             Mark segment IN / OUT (O optional: end",
+    "                  of video is used if OUT is not set)",
     "C                 Clear current segment marks",
-    "E                 Export current segment",
+    "E                 Export segment (auto-named, saves in",
+    "                  the background - keep working)",
+    "X                 Clear ALL saved segments (confirm)",
     "P                 Print saved segments to console",
     "H                 Toggle this help",
     "Q                 Save and quit",
@@ -122,6 +129,9 @@ class SyncTool:
         self.status_msg = "Press H for controls"
         self.seg_in: int | None = None
         self.seg_out: int | None = None
+        self.pending_clear_all = False
+        self._export_lock = threading.Lock()
+        self._jobs: list[dict] = []
 
         self._layout()
 
@@ -185,44 +195,106 @@ class SyncTool:
         self.seg_out = None
         self._set_status("Segment marks cleared")
 
-    def export_current_segment(self):
-        if self.seg_in is None or self.seg_out is None:
-            self._set_status("Mark both IN (I) and OUT (O) before exporting")
+    def clear_all_segments(self):
+        """Forget every saved segment for this video set (two-press confirm)."""
+        n = len(self.sync.get("segments", []))
+        if n == 0:
+            self.pending_clear_all = False
+            self._set_status("No saved segments to clear")
             return
-        ref_in, ref_out = sorted((self.seg_in, self.seg_out))
+        if not self.pending_clear_all:
+            self.pending_clear_all = True
+            self._set_status(f"Press X again to clear ALL {n} saved segments")
+            return
+        self.sync["segments"] = []
+        self.pending_clear_all = False
+        self.save()
+        self._set_status(f"Cleared all {n} saved segments")
+
+    def export_current_segment(self):
+        if self.seg_in is None:
+            self._set_status("Mark an IN point (I) before exporting")
+            return
+        ref = self.cams[self._ref_idx()]
+        # If OUT was never marked, run the segment to the end of the video.
+        seg_out = self.seg_out if self.seg_out is not None else ref.total - 1
+        ref_in, ref_out = sorted((self.seg_in, seg_out))
         if ref_out - ref_in < 2:
             self._set_status("Segment too short to export")
             return
 
-        offsets = self.sync.get("offsets") or {n: 0 for n in self.names}
-        default_name = sync_io.next_segment_name(self.sync["segments"])
-        try:
-            typed = input(f"  Segment name [{default_name}]: ").strip()
-        except EOFError:
-            typed = ""
-        name = typed or default_name
+        # Use the CURRENT per-camera positions so every manual adjustment made
+        # along the way (lag fixes, freezes, nudges) is reflected in the export.
+        offsets = {c.name: c.frame_idx - ref.frame_idx for c in self.cams}
+        self.sync["offsets"] = offsets
+        self.sync["reference"] = self.reference
+        self.save()
 
-        out_fps = self.cams[self._ref_idx()].fps
-        self._set_status(f"Exporting '{name}'... (see console)")
+        name = self._auto_segment_name()
+        out_fps = ref.fps
+        job = {"name": name, "status": "running", "thread": None}
+        self._jobs.append(job)
+
+        thread = threading.Thread(
+            target=self._export_worker,
+            args=(self.reference, dict(offsets), ref_in, ref_out, name, out_fps, job),
+            daemon=True,
+        )
+        job["thread"] = thread
+        thread.start()
+        self._set_status(f"Exporting '{name}' in background - keep working")
+
+        # Ready for the next segment immediately.
+        self.seg_in = None
+        self.seg_out = None
+
+    def _auto_segment_name(self) -> str:
+        """Timestamped, collision-free segment name (no user prompt needed)."""
+        base = datetime.now().strftime("seg_%Y%m%d_%H%M%S")
+        with self._export_lock:
+            taken = {s.get("name") for s in self.sync.get("segments", [])}
+        taken |= {j["name"] for j in self._jobs}
+        name, i = base, 2
+        while name in taken:
+            name = f"{base}_{i}"
+            i += 1
+        return name
+
+    def _export_worker(self, reference, offsets, ref_in, ref_out, name, out_fps, job):
         try:
             out_dir = export_segment(
-                self.project, self.reference, offsets, ref_in, ref_out, name, out_fps
+                self.project, reference, offsets, ref_in, ref_out, name, out_fps
             )
         except (ValueError, IOError) as exc:
-            self._set_status(f"Export failed: {exc}")
+            job["status"] = "error"
+            self.status_msg = f"Export '{name}' FAILED: {exc}"
+            logger.error(f"Export '{name}' failed: {exc}")
             return
+        with self._export_lock:
+            self.sync["segments"].append({
+                "name": name,
+                "ref_in": ref_in,
+                "ref_out": ref_out,
+                "output_fps": out_fps,
+                "exported": True,
+            })
+            self.save()
+        job["status"] = "done"
+        self.status_msg = f"Exported '{name}'"
+        print(f"\n  Exported '{name}' -> {out_dir}\n"
+              f"    To track + match it:  python -m multicam_reid match {out_dir}\n")
 
-        self.sync["segments"].append({
-            "name": name,
-            "ref_in": ref_in,
-            "ref_out": ref_out,
-            "output_fps": out_fps,
-            "exported": True,
-        })
-        self.save()
-        self._set_status(f"Exported '{name}' -> {out_dir}")
-        print(f"\n  To track + match this segment:\n"
-              f"    python -m multicam_reid match {out_dir}\n")
+    def _active_jobs(self) -> int:
+        return sum(1 for j in self._jobs if j["status"] == "running")
+
+    def _await_exports(self):
+        running = [j for j in self._jobs if j["status"] == "running"]
+        if running:
+            logger.info(f"  Waiting for {len(running)} export(s) to finish...")
+            for j in running:
+                t = j.get("thread")
+                if t is not None:
+                    t.join()
 
     def print_segments(self):
         segs = self.sync.get("segments", [])
@@ -292,14 +364,16 @@ class SyncTool:
         seg_in = self.seg_in if self.seg_in is not None else "-"
         seg_out = self.seg_out if self.seg_out is not None else "-"
         n_saved = len(self.sync.get("segments", []))
+        active = self._active_jobs()
+        exporting = f"  |  Exporting {active}..." if active else ""
         line2 = (f"Segment IN: {seg_in}  OUT: {seg_out}  |  "
-                 f"Saved segments: {n_saved}  |  {self.status_msg}")
+                 f"Saved segments: {n_saved}{exporting}  |  {self.status_msg}")
         draw_text(canvas, line2, (10, y0 + 52), scale=0.55, color=(0, 220, 255), weight=1)
 
         state = "PAUSED" if self.paused else f"PLAYING {self.speed}x"
         draw_text(
             canvas,
-            f"{state} | A anchor  I/O in-out  E export  R ref  F freeze  H help  Q quit",
+            f"{state} | A anchor  I/O in-out  E export  X clear-all  R ref  F freeze  H help  Q quit",
             (10, y0 + 80), scale=0.5, color=(180, 180, 180), weight=1,
         )
 
@@ -319,7 +393,7 @@ class SyncTool:
                   scale=0.45, color=(180, 180, 180), weight=1)
 
     def _draw_help(self, canvas):
-        pad, line_h, box_w = 16, 23, 470
+        pad, line_h, box_w = 14, 21, 470
         box_h = pad * 2 + line_h * len(HELP_LINES)
         x0 = (self.canvas_w - box_w) // 2
         y0 = max(10, (self.canvas_h - box_h) // 2)
@@ -338,7 +412,9 @@ class SyncTool:
     # ------------------------------------------------------------------ #
     def run(self):
         window = f"multicam_reid sync - {self.project.folder.name}"
-        cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+        # WINDOW_GUI_NORMAL removes OpenCV's native Qt toolbar (zoom/pan/save),
+        # whose blurry tooltips are unreadable; we provide our own H help instead.
+        cv2.namedWindow(window, cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
         cv2.resizeWindow(window, min(self.canvas_w, MAX_CANVAS_WIDTH),
                          min(self.canvas_h, MAX_CANVAS_HEIGHT))
 
@@ -363,16 +439,22 @@ class SyncTool:
                 continue
 
             a = self.active
+            if key != ord('x'):
+                self.pending_clear_all = False
             if key in (ord('q'), 27):
                 self.save()
+                self._await_exports()
                 logger.info(f"  Saved sync data to {sync_io.sync_path(self.project)}")
                 break
             elif key == ord(' '):
                 self.paused = not self.paused
             elif key == ord('f'):
                 self.cams[a].frozen = not self.cams[a].frozen
-                self._set_status(f"{self.cams[a].name}: "
-                                 f"{'frozen' if self.cams[a].frozen else 'unfrozen'}")
+                if self.cams[a].frozen:
+                    self._set_status(f"{self.cams[a].name} frozen - press SPACE to "
+                                     f"play the other cams; nudge this one with arrows")
+                else:
+                    self._set_status(f"{self.cams[a].name} unfrozen")
             elif key in (ord('+'), ord('=')):
                 self.speed = min(self.speed * 2, 16)
             elif key in (ord('-'), ord('_')):
@@ -423,6 +505,8 @@ class SyncTool:
                 self.clear_segment()
             elif key == ord('e'):
                 self.export_current_segment()
+            elif key == ord('x'):
+                self.clear_all_segments()
             elif key == ord('p'):
                 self.print_segments()
             elif key == ord('h'):
