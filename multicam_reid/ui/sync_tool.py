@@ -47,21 +47,20 @@ HELP_LINES = [
     "R                 Make active camera the REFERENCE",
     "-> / <-           Active cam step +/- 1 frame",
     "] / [             Active cam step +/- 10 frames",
-    "} / {  (Sh+])     Active cam step +/- 50 frames",
+    "} / {             Active cam step +/- 50 frames",
     ". / ,             ALL cams step +/- 1 frame",
     "L / J             ALL cams skip +/- 5 seconds",
     "SPACE             Play / Pause all",
-    "+ / -             Playback speed (fast-forward all when playing)",
-    "F                 Freeze active cam (it stays still while",
-    "                  the OTHER cams keep playing on SPACE)",
+    "+ / -             Playback speed (fast-forward all)",
+    "F                 Freeze active cam (others keep playing)",
     "HOME              All cams to frame 0",
     "",
     "A                 Set ANCHOR (lock offsets here)",
-    "I / O             Mark segment IN / OUT (O optional: end",
-    "                  of video is used if OUT is not set)",
+    "I / O             Mark segment IN / OUT",
+    "                  (O optional - end of video if unset)",
     "C                 Clear current segment marks",
-    "E                 Export segment (auto-named, saves in",
-    "                  the background - keep working)",
+    "E                 Export segment (auto-named, background)",
+    "                  Playing to the END auto-exports too",
     "X                 Clear ALL saved segments (confirm)",
     "P                 Print saved segments to console",
     "H                 Toggle this help",
@@ -130,6 +129,7 @@ class SyncTool:
         self.seg_in: int | None = None
         self.seg_out: int | None = None
         self.pending_clear_all = False
+        self._end_handled = False
         self._export_lock = threading.Lock()
         self._jobs: list[dict] = []
 
@@ -184,6 +184,7 @@ class SyncTool:
 
     def mark_in(self):
         self.seg_in = self.cams[self._ref_idx()].frame_idx
+        self._end_handled = False
         self._set_status(f"Segment IN = {self.seg_in} (reference frame)")
 
     def mark_out(self):
@@ -283,6 +284,22 @@ class SyncTool:
         self.status_msg = f"Exported '{name}'"
         print(f"\n  Exported '{name}' -> {out_dir}\n"
               f"    To track + match it:  python -m multicam_reid match {out_dir}\n")
+
+    def _advance_playback(self):
+        """Step all non-frozen cameras one tick; auto-handle end of video."""
+        for cam in self.cams:
+            if not cam.frozen:
+                cam.step(self.speed)
+        ref = self.cams[self._ref_idx()]
+        if ref.frame_idx >= ref.total - 1:
+            # Reached the end of the reference video: stop playing.
+            self.paused = True
+            if self.seg_in is not None and not self._end_handled:
+                # Auto-export the open segment using end-of-video as OUT.
+                self._end_handled = True
+                self.export_current_segment()
+            else:
+                self._set_status("Reached end of video")
 
     def _active_jobs(self) -> int:
         return sum(1 for j in self._jobs if j["status"] == "running")
@@ -393,7 +410,7 @@ class SyncTool:
                   scale=0.45, color=(180, 180, 180), weight=1)
 
     def _draw_help(self, canvas):
-        pad, line_h, box_w = 14, 21, 470
+        pad, line_h, box_w = 12, 20, 470
         box_h = pad * 2 + line_h * len(HELP_LINES)
         x0 = (self.canvas_w - box_w) // 2
         y0 = max(10, (self.canvas_h - box_h) // 2)
@@ -433,9 +450,7 @@ class SyncTool:
 
             if key == -1:
                 if not self.paused:
-                    for cam in self.cams:
-                        if not cam.frozen:
-                            cam.step(self.speed)
+                    self._advance_playback()
                 continue
 
             a = self.active
@@ -512,9 +527,7 @@ class SyncTool:
             elif key == ord('h'):
                 self.show_help = not self.show_help
             elif not self.paused:
-                for cam in self.cams:
-                    if not cam.frozen:
-                        cam.step(self.speed)
+                self._advance_playback()
 
         for cam in self.cams:
             cam.release()

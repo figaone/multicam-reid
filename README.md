@@ -210,6 +210,8 @@ How it works:
 4. Press **E** to export. The segment is **auto-named** with a timestamp
    (e.g. `seg_20260612_112209`) and written **in the background** — you can keep
    scrubbing and mark/export the next segment immediately while it saves.
+   Letting playback run to the **end of the video** also auto-exports the open
+   segment (no key press needed).
 5. Repeat 3–4 to cut as many segments as you like — each is saved separately.
 
 **Fine-tuning alignment while playing.** Press **F** to *freeze* the active
@@ -223,6 +225,11 @@ adjustment you made along the way is reflected in the final clip.
 > offset for the whole segment. That perfectly captures a fixed lag correction.
 > If a camera *drifts continuously* within a segment, split it into shorter
 > segments instead.
+>
+> **Equal length.** All exported clips for a segment have exactly the same
+> number of frames. If a camera's offset would run past the start or end of its
+> source video, the segment is automatically trimmed to the range every camera
+> can cover — so there are no duplicated or frozen padding frames.
 
 Before the window opens, `sync` prints each camera's frame rate and warns if
 they differ — a constant offset can drift over long segments when the cameras
@@ -263,7 +270,7 @@ Press **H** in the sync window for this list any time.
 | `A`            | Set the alignment **anchor**                 |
 | `I` / `O`      | Mark segment **in** / **out** (`O` optional — end of video if unset) |
 | `C`            | Clear the current segment marks              |
-| `E`            | Export segment (auto-named, saves in background) |
+| `E`            | Export segment (auto-named, saves in background; end of video auto-exports) |
 | `X`            | Clear **all** saved segments (press twice to confirm) |
 | `P`            | Print saved segments to the console          |
 | `H`            | Toggle help overlay                          |
