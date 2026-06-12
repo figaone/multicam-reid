@@ -445,7 +445,12 @@ class SyncTool:
 
         while True:
             cv2.imshow(window, self.render())
-            wait_ms = 0 if self.paused else max(1, int(1000 / (self.cams[0].fps * self.speed)))
+            # When paused we still poll periodically (not 0 = block forever) so
+            # the UI keeps refreshing and shows background export status updates.
+            if self.paused:
+                wait_ms = 100
+            else:
+                wait_ms = max(1, int(1000 / (self.cams[0].fps * self.speed)))
             key = cv2.waitKeyEx(wait_ms)
 
             if key == -1:
