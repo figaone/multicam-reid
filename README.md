@@ -50,6 +50,11 @@ pip install -r requirements.txt
 Requires Python 3.10+. Tracking uses [Ultralytics YOLO](https://docs.ultralytics.com/)
 with ByteTrack; a GPU is recommended but not required.
 
+> The **automatic, anchor-free calibration** step uses MapAnything, which is an
+> optional external tool installed in its own environment — see
+> [Anchor-free calibration with MapAnything](#anchor-free-calibration-with-mapanything).
+> You do **not** need it for the manual/bootstrap workflow.
+
 ## Quick start
 
 Put your camera videos in a single folder (any names, any common format):
@@ -533,9 +538,76 @@ road plane and a per-camera image→map homography automatically.
 On the reference intersection this matched the hand-calibrated map almost exactly
 (spatial separation of true vs. look-alike pairs ≈ 15.5× vs. 17.6× for the manual
 frame, and comparable end-to-end precision) **with zero manual anchors** — while a
-single supplied homography reached only ≈ 2.9×. It runs in its own environment
-(see `scripts/run_mapanything_reconstruct.py`); the resulting frame plugs straight
-into `automatch --ground-frame ...`.
+single supplied homography reached only ≈ 2.9×.
+
+> **MapAnything is an optional, external dependency — it is *not* bundled in this
+> repo.** It is a large model with its own heavy dependencies (PyTorch, DINOv2)
+> and its own license, so vendoring it would bloat the repo and mix licenses. You
+> install it once, in its **own** conda environment; only the reconstruction step
+> (`run_mapanything_reconstruct.py`) runs inside that environment. Everything else
+> — the adapter, matcher, and rendering — runs in the normal project environment.
+> A GPU is recommended but **not required** (3 stills reconstruct fine on CPU).
+
+**Step 1 — install MapAnything once (separate environment):**
+
+```bash
+conda create -n mapanything python=3.12 -y
+conda activate mapanything
+git clone https://github.com/facebookresearch/map-anything.git
+cd map-anything
+pip install torch torchvision          # add --index-url https://download.pytorch.org/whl/cpu for CPU-only
+pip install -e .
+cd -
+```
+
+**Step 2 — grab one synchronized still per camera** (same moment in each video;
+a clear view of the road is ideal):
+
+```bash
+ffmpeg -i my_intersection/cam_north.mp4 -vf "select=eq(n\,600)" -vframes 1 cam1.png
+ffmpeg -i my_intersection/cam_east.mp4  -vf "select=eq(n\,600)" -vframes 1 cam2.png
+ffmpeg -i my_intersection/cam_west.mp4  -vf "select=eq(n\,600)" -vframes 1 cam3.png
+```
+
+**Step 3 — reconstruct in 3D** (in the MapAnything environment):
+
+```bash
+conda activate mapanything
+python scripts/run_mapanything_reconstruct.py \
+    --images cam1.png cam2.png cam3.png --cam-nums 1 2 3 \
+    --out-dir recon --apache
+conda deactivate
+```
+
+**Step 4 — turn the reconstruction into a shared map** (normal project env):
+
+```bash
+python scripts/mapanything_to_ground_frame.py \
+    --recon-dir recon \
+    --out my_intersection/.reid/ground_frame.json
+```
+
+**Step 5 — use it to match** (the frame plugs straight into `automatch`):
+
+```bash
+python -m multicam_reid automatch my_intersection \
+    --ground-frame my_intersection/.reid/ground_frame.json --max-world-dist 6
+```
+
+**Optional checks:**
+
+```bash
+# see the 3D point cloud (writes reconstruction.ply + top/oblique/side views)
+python scripts/visualize_reconstruction.py --recon-dir recon
+
+# score the automatic map vs. a manual one (bigger separation = better)
+python scripts/compare_shared_frames.py my_intersection \
+    --mapanything my_intersection/.reid/ground_frame.json
+```
+
+If you don't want the automatic route, skip MapAnything entirely and build the
+shared map from manual matches instead (`scripts/build_shared_frame.py`) — the
+rest of the pipeline is identical.
 
 ---
 
