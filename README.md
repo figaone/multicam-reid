@@ -429,3 +429,146 @@ or `null` if the object was not visible / not linked in that camera.
 camera `cam` at reference frame `r` is `r + offsets[cam]`. Each `segment` records
 the in/out window (on the reference timeline) it was cut from.
 
+---
+
+# Automatic cross-camera matching
+
+The interactive `match` command is the ground-truth tool: a human links the same
+vehicle across cameras. On top of that, the toolkit can **pre-populate matches
+automatically** with an AI-City-style pipeline, so the annotator starts from
+confident machine matches instead of a blank slate — and, with a calibrated
+shared ground map, can approach full automation.
+
+The automatic matcher combines two independent signals:
+
+1. **Appearance** — a vehicle re-identification network turns each track into an
+   embedding ("fingerprint"). The same car gets a similar embedding even from a
+   different viewpoint.
+2. **Real-world position** — if a shared ground map is available, each track's
+   foot point is projected onto one common bird's-eye plane. Two tracks are only
+   matched if they are close **on the ground at the same time**. This spatial
+   gate is what removes look-alike false positives (two different white sedans),
+   and is the single biggest precision lever.
+
+Two tracks are declared the same vehicle only when they (a) look alike, (b) are
+co-visible in time, and (c) sit at the same place on the shared map. Mutual
+nearest-neighbour matching plus union-find clustering then assigns one global ID
+per vehicle (never reusing a camera within an ID).
+
+### `automatch` — compute cross-camera matches automatically
+
+```bash
+python -m multicam_reid automatch my_intersection \
+    --threshold 0.45 --min-covis 3 \
+    --ground-frame my_intersection/.reid/ground_frame.json \
+    --max-world-dist 0.75
+```
+
+Writes `matches.json` exactly like the interactive matcher, so you can open the
+result in `match` to review/correct it, or `export` it directly.
+
+| Argument             | Type  | Default | Meaning |
+| -------------------- | ----- | ------- | ------- |
+| `folder`             | path  | —       | Project folder (or a `.reid/synced/<segment>` path). |
+| `--threshold`        | float | `0.45`  | Max appearance distance (1 − cosine) to consider two tracks a candidate. Lower = stricter. |
+| `--min-covis`        | int   | `3`     | Minimum number of co-visible frames required between two tracks. |
+| `--ground-frame`     | path  | auto    | Shared ground map JSON. If omitted, `.reid/ground_frame.json` is used when present. |
+| `--max-world-dist`   | float | `0.75`  | Spatial gate: max real-world distance between foot points on the shared map. (~6 for a homography/MapAnything frame — the CLI/scripts pick a sensible default per frame type.) |
+| `--no-require-world` | flag  | off     | Allow matches that lack spatial confirmation. **Leave off for high precision** — requiring positive spatial evidence is what keeps precision high. |
+| `--samples`          | int   | `6`     | Appearance crops sampled per track for the embedding. |
+| `--min-size`         | int   | `24`    | Ignore boxes smaller than this (pixels) when embedding. |
+| `--min-len`          | int   | `5`     | Ignore tracks shorter than this many frames. |
+| `--rerank`           | flag  | off     | Use k-reciprocal re-ranking on the appearance distances (slower, sometimes higher recall). |
+| `--allow-nonmutual`  | flag  | off     | Keep non-mutual nearest-neighbour edges (higher recall, lower precision). |
+| `--weights`          | path  | auto    | Custom ReID weights file. Defaults to the cached fast-reid VeRi-Wild model. |
+
+The ReID backbone is a ResNet50-IBN-a with GeM pooling and a BNNeck, loadable
+from fast-reid VeRi-Wild weights (cached under `~/.cache/multicam_reid/`). Plain
+ImageNet weights are **not** suitable for vehicles — use vehicle-ReID weights.
+
+---
+
+# Camera calibration & the shared ground map
+
+The spatial gate needs a **shared ground map**: a single bird's-eye plane onto
+which every camera can project a vehicle's foot point. There are three ways to
+build one, from most manual to fully automatic.
+
+`multicam_reid.core` provides the geometry:
+
+- **`calibration.py`** — per-camera lens undistortion and an image→ground
+  homography derived from intrinsics + vanishing points (each camera's *own*
+  bird's-eye, up to a similarity).
+- **`ground_align.py`** — ties the per-camera planes into **one** shared frame.
+  `GroundFrame` (calibrated) and `HomographyGroundFrame` (direct per-camera
+  homography) share a common `has()` / `project_feet()` interface, so the matcher
+  and renderers work with either. `load_ground_frame()` auto-detects the type.
+- **`ground_bootstrap.py`** — builds a shared frame from cross-camera track
+  correspondences (foot points of matched vehicles at co-visible frames).
+
+### Three ways to get a shared map
+
+1. **Bootstrap from manual matches** — use the matches you already labelled as
+   free calibration data. Foot points of the same vehicle at co-visible frames
+   are the same physical ground point in two cameras; RANSAC-aligning many of
+   them lands every camera on one shared frame. This is high quality but needs a
+   set of manual matches per deployment.
+2. **Manual anchors** — click a handful of shared landmarks (crosswalk corners,
+   pole bases) in each camera.
+3. **Automatic, anchor-free (MapAnything)** — reconstruct the intersection in 3D
+   from a few still frames, fit the ground plane, and derive each camera's
+   image→map homography with **no human input at all**. This is the path to full
+   automation (see below).
+
+Both a calibrated bootstrap frame and an automatic homography frame are stored as
+`.reid/ground_frame.json` and consumed transparently by `automatch`.
+
+### Anchor-free calibration with MapAnything
+
+[MapAnything](https://github.com/facebookresearch/map-anything) is a feed-forward
+metric-3D reconstruction model. Given one still per camera it returns the scene
+geometry and camera poses in a single shared world frame — from which we fit the
+road plane and a per-camera image→map homography automatically.
+
+On the reference intersection this matched the hand-calibrated map almost exactly
+(spatial separation of true vs. look-alike pairs ≈ 15.5× vs. 17.6× for the manual
+frame, and comparable end-to-end precision) **with zero manual anchors** — while a
+single supplied homography reached only ≈ 2.9×. It runs in its own environment
+(see `scripts/run_mapanything_reconstruct.py`); the resulting frame plugs straight
+into `automatch --ground-frame ...`.
+
+---
+
+# Research & experiment scripts (`scripts/`)
+
+These standalone scripts drive experiments and calibration around the core
+package. Run them from this directory (e.g. `python scripts/<name>.py --help`).
+
+| Script | Purpose |
+| ------ | ------- |
+| `build_homography.py`            | Undistort + per-camera ground homography from intrinsics; writes preview panels. |
+| `build_shared_frame.py`          | Build a shared `ground_frame.json` **from manual matches** (one-time calibration). |
+| `bootstrap_ground_frame.py`      | Bootstrap a shared frame from track-match correspondences; scatter visualisation. |
+| `run_mapanything_reconstruct.py` | **Anchor-free:** run MapAnything on 3 stills → per-camera 3D reconstruction (`.npz`). Runs in the MapAnything env. |
+| `mapanything_to_ground_frame.py` | Turn a MapAnything reconstruction into a shared `ground_frame.json` (fit plane + per-camera homography). |
+| `visualize_reconstruction.py`    | Render a MapAnything reconstruction as a coloured 3D point cloud (`.ply` + top/oblique/side views). |
+| `compare_shared_frames.py`       | Score shared-map sources head-to-head (bootstrap vs. homography vs. MapAnything) by true-vs-random separation. |
+| `render_best_matching.py`        | Run `automatch` and render an inspection video: camera panels with IDs + the shared bird's-eye map. |
+| `eval_automatch.py`              | Rank metrics for the appearance embeddings vs. manual matches. |
+| `eval_team_homography.py`        | P/R sweep for a per-camera homography frame (team or MapAnything) as the spatial gate. |
+| `score_automatch.py`             | Pairwise precision / recall / F1 of `matches.json` vs. a manual backup. |
+| `sweep_automatch.py`             | Appearance-only parameter sweep (cached features). |
+| `sweep_spatial_gate.py`          | Sweep the spatial-gate parameters (appearance threshold, world distance). |
+| `calibrate_world_gate.py`        | Measure real-world distance for positive vs. negative pairs to choose the gate threshold. |
+| `run_team_matching.py`           | Run matching with the supplied per-camera homographies and render the inspection video. |
+
+### New `.reid/` artifacts
+
+Automatic matching and calibration add a few files to the workspace:
+
+| File | Written by | Contents |
+| ---- | ---------- | -------- |
+| `calibration.json`  | `build_homography.py`             | Per-camera intrinsics + undistortion + ground homography. |
+| `ground_frame.json` | `build_shared_frame.py` / `mapanything_to_ground_frame.py` | The shared ground map (calibrated *or* homography type). |
+| `matches.json`      | `automatch`                       | Machine-generated matches (same schema as the manual tool). |
+

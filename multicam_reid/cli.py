@@ -105,6 +105,37 @@ def cmd_match(args):
     matcher.run()
 
 
+def cmd_automatch(args):
+    project = _ensure_project(args.folder, force=False)
+
+    if not project.has_tracks():
+        missing = [c.name for c in project.missing_tracks()]
+        logger.warning(f"  No cached tracks for: {', '.join(missing)}")
+        if _confirm("  Run detection + tracking now?"):
+            _run_tracking(project, args)
+        else:
+            logger.error("  Cannot auto-match without tracks. Run 'track' first.")
+            return
+
+    from .reid.auto_match import auto_match
+
+    auto_match(
+        project,
+        samples_per_track=args.samples,
+        min_box_size=args.min_size,
+        min_track_len=args.min_len,
+        dist_threshold=args.threshold,
+        min_covis=args.min_covis,
+        mutual_only=not args.allow_nonmutual,
+        use_reranking=args.rerank,
+        weights_path=args.weights,
+        ground_frame_path=args.ground_frame,
+        max_world_dist=args.max_world_dist,
+        require_world=not args.no_require_world,
+    )
+    logger.info(f"  Matches written to {project.matches_path}")
+
+
 def cmd_export(args):
     project = _ensure_project(args.folder, force=False)
     from .core.exporter import export_reid_dataset
@@ -190,6 +221,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_match.add_argument("--frame", type=int, default=0, help="Starting frame")
     add_tracking_opts(p_match)
     p_match.set_defaults(func=cmd_match)
+
+    p_auto = sub.add_parser("automatch",
+                            help="Automatic appearance-based cross-camera matching (AI City / MTMC style)")
+    p_auto.add_argument("folder")
+    p_auto.add_argument("--samples", type=int, default=6,
+                        help="Crops sampled per track for the appearance embedding")
+    p_auto.add_argument("--min-size", type=int, default=24,
+                        help="Minimum crop size in pixels")
+    p_auto.add_argument("--min-len", type=int, default=5,
+                        help="Ignore tracks shorter than this many frames")
+    p_auto.add_argument("--threshold", type=float, default=0.45,
+                        help="Max cosine ReID distance to accept a match (lower = stricter)")
+    p_auto.add_argument("--min-covis", type=int, default=3,
+                        help="Min frames two tracks must be co-visible to be candidates")
+    p_auto.add_argument("--allow-nonmutual", action="store_true",
+                        help="Accept one-directional nearest neighbors (higher recall, lower precision)")
+    p_auto.add_argument("--rerank", action="store_true",
+                        help="Use k-reciprocal re-ranking instead of plain cosine distance")
+    p_auto.add_argument("--ground-frame", default=None,
+                        help="Path to a shared ground_frame.json (defaults to one in the workspace if present)")
+    p_auto.add_argument("--max-world-dist", type=float, default=0.75,
+                        help="Max real-world foot-point distance to accept a match (shared-frame units)")
+    p_auto.add_argument("--no-require-world", action="store_true",
+                        help="Do not require spatial confirmation when a ground frame is loaded")
+    p_auto.add_argument("--weights", default=None,
+                        help="Path to ReID backbone weights (defaults to cached vehicle-ReID model)")
+    add_tracking_opts(p_auto)
+    p_auto.set_defaults(func=cmd_automatch)
 
     p_export = sub.add_parser("export", help="Export a ReID crop dataset from matches")
     p_export.add_argument("folder")

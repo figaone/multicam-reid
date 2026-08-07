@@ -1,5 +1,14 @@
+# Core tool
 opencv-python>=4.8
 numpy>=1.24
 loguru>=0.7
 ultralytics>=8.1
 Pillow>=9.0
+
+# Automatic re-identification (appearance matching)
+torch>=2.1
+torchvision>=0.16
+
+# Calibration / shared ground map + experiment scripts
+scipy>=1.11
+matplotlib>=3.7

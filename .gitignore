@@ -1,4 +1,4 @@
-# Python
+# ── Python ────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -7,20 +7,55 @@ build/
 dist/
 .Python
 
-# Virtual environments
+# ── Virtual environments ──────────────────────────────────
 .venv/
 venv/
 env/
 
-# Tool workspace / generated outputs
+# ── Tool workspace / generated outputs ────────────────────
 .reid/
 *.tracks.json
 
-# Model weights
+# ── Model weights ─────────────────────────────────────────
 *.pt
+*.pth
 *.onnx
+*.pkl
 
-# Editor / OS
+# ── Reconstruction / numeric dumps ────────────────────────
+*.npz
+*.npy
+*.ply
+*.glb
+
+# ── Media / data / reports (never in git) ─────────────────
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.pptx
+*.pdf
+
+# ── Logs ──────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Non-code project areas (kept out of this repo) ────────
+presentation/
+external_reid/
+external_tools/
+notebooks/
+test/
+Fw_ Homography/
+multicam_reid/presentation_generator.py
+
+# ── Editor / OS ───────────────────────────────────────────
 .vscode/
 .idea/
 .DS_Store
+Thumbs.db
