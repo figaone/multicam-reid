@@ -1,14 +1,16 @@
-# Core tool
+# Core tool (detection, tracking, matching, export)
 opencv-python>=4.8
 numpy>=1.24
 loguru>=0.7
-ultralytics>=8.1
+ultralytics>=8.1        # YOLO + ByteTrack (pulls in torch/torchvision)
 Pillow>=9.0
 
-# Automatic re-identification (appearance matching)
-torch>=2.1
-torchvision>=0.16
+# Automatic cross-camera re-identification (vehicle appearance embeddings)
+torch>=2.1              # ReID backbone is pure-torch (no torchvision needed)
 
-# Calibration / shared ground map + experiment scripts
-scipy>=1.11
+# Visualization: inspection videos, 3D reconstruction views, plots
 matplotlib>=3.7
+
+# ── Optional, installed separately (NOT via this file) ──────────────────
+# Anchor-free calibration uses MapAnything in its OWN conda environment.
+# See the README section "Anchor-free calibration with MapAnything".
